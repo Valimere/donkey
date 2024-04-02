@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"github.com/Valimere/donkey/reddit"
 	"log"
 	"os"
 	"strings"
@@ -42,5 +44,17 @@ func main() {
 		}
 	}
 
-	log.Printf("\nStarting app, Subreddits chosen: %v\n", subreddits)
+	log.Printf("Starting app, Subreddits chosen: %v\n", subreddits)
+
+	for _, subreddit := range subreddits {
+		log.Printf("getting subreddit: %s", subreddit)
+		posts, err := reddit.GetSubredditPosts(subreddit)
+		if err != nil {
+			log.Fatalf("Failed to get posts: %v", err)
+		}
+		for _, post := range posts {
+			fmt.Println(post.Title)
+		}
+	}
+
 }
