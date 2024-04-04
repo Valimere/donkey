@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/Valimere/donkey/db"
 	"github.com/Valimere/donkey/socialmedia"
 	"log"
 	"os"
@@ -15,28 +16,27 @@ var (
 	DELAY = time.Duration(1)
 )
 
-func main() {
-	subredditsArg := flag.String("r", "music", "comma-separated list of subreddits i.e. \"funny, music\"")
-	logFile := flag.String("log", "", "path to log file (optional)")
-	flag.Parse()
+// handleFatalErrors is a helper function to make your error handling more uniform
+func handleFatalErrors(err error, msg string) {
+	if err != nil {
+		log.Fatalf("%s: %s", msg, err)
+	}
+}
 
-	// Configure logging
+// configureLogOutput : set the log output destination
+func configureLogOutput(logFile *string) {
 	if *logFile != "" {
 		file, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err != nil {
-			log.Fatalf("Error opening log file: %v", err)
-		}
-		defer func(file *os.File) {
-			err := file.Close()
-			if err != nil {
-				log.Fatalf("error trying to close the file %v", err)
-			}
-		}(file)
+		handleFatalErrors(err, "Error opening log file")
+		defer file.Close()
 		log.SetOutput(file)
 	} else {
 		log.SetOutput(os.Stdout)
 	}
+}
 
+// parseSubreddits : Clean up the subreddits input
+func parseSubreddits(subredditsArg *string) []string {
 	// Split the subredditsArg into a slice of uncleanSubreddits
 	uncleanSubreddits := strings.Split(*subredditsArg, ",")
 
@@ -48,31 +48,59 @@ func main() {
 			subreddits = append(subreddits, subreddit)
 		}
 	}
+	return subreddits
+}
+
+func main() {
+	subredditsArg := flag.String("r", "music", "comma-separated list of subreddits i.e. \"funny, music\"")
+	logFile := flag.String("log", "", "path to log file (optional)")
+	flag.Parse()
+
+	// Configure logging
+	configureLogOutput(logFile)
+
+	subreddits := parseSubreddits(subredditsArg)
 
 	log.Printf("Subreddits chosen: %v\n", subreddits)
-	client := socialmedia.NewClient()
-	ctx := context.Background()
 
-	// Start the HTTP server in a goroutine and get the authorization URL
-	serverErr := client.StartServer(ctx)
+	// Initialize db connection and create store
+	db.InitDB()
+	store := &db.DBStore{DB: db.DB}
 
-	if serverErr != nil {
-		log.Fatalf("Error in server: %s", serverErr)
+	// Check if a token exists in the database
+	dbToken, err := store.GetToken()
+	if err != nil {
+		if err.Error() == "record not found" {
+			log.Println("No existing token found in the database. Requesting a new one.")
+		} else {
+			log.Fatalf("Unexpected error retrieving token from the store: %v\n", err)
+		}
 	}
 
-	token, err := client.ExchangeAuthCode(ctx)
+	var client *socialmedia.Client
 
-	log.Printf("token received: %s", token)
+	if dbToken.Valid() && !dbToken.Expiry.Before(time.Now()) {
+		// If the token exists and it has not expired, use it
+		client = socialmedia.NewClientWithToken(dbToken)
+	} else {
+		client = socialmedia.NewClient()
 
-	if err != nil {
-		panic(err)
+		serverErr := client.StartServer(context.Background())
+		handleFatalErrors(serverErr, "Error in server")
+
+		token, err := client.ExchangeAuthCode(context.Background())
+		handleFatalErrors(err, "Failed to exchange auth code")
+
+		log.Printf("token received: %s", token.AccessToken)
+
+		err = store.SaveToken(token)
+		handleFatalErrors(err, "Failed to save the token")
 	}
 
 	for _, subreddit := range subreddits {
-		posts, err := client.FetchPosts(ctx, subreddit)
-		if err != nil {
-			panic(err)
-		}
+		posts, err := client.FetchPosts(context.Background(), subreddit)
+		handleFatalErrors(err, "Error fetching posts")
+
 		for _, post := range posts {
 			fmt.Printf("Post ID: %s\n", post.ID)
 			fmt.Printf("Title: %s\n", post.Title)
@@ -81,12 +109,4 @@ func main() {
 			fmt.Println()
 		}
 	}
-
-	// For demonstration, printing JSON response
-	//var jsonData map[string]interface{}
-	//err = json.Unmarshal(posts, &jsonData)
-	//if err != nil {
-	//	log.Printf("unable to unmarshall json error: %v", err)
-	//}
-	//fmt.Println(jsonData)
 }

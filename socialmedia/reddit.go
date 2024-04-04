@@ -12,12 +12,41 @@ import (
 	"time"
 )
 
+const (
+	redirectURL        = "http://localhost:8080/callback"
+	authURL            = "https://www.reddit.com/api/v1/authorize"
+	tokenURL           = "https://www.reddit.com/api/v1/access_token"
+	authorizationScope = "read"
+)
+
+var (
+	clientID                 = os.Getenv("REDDIT_CLIENT_ID")
+	clientSecret             = os.Getenv("REDDIT_CLIENT_SECRET")
+	_            SocialMedia = &Client{} // Ensure reddit.Client implements SocialMedia interface at compile time.
+)
+
+// helper function to build oauth2 config
+func getOAuthConfig() *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
+		Scopes:       []string{authorizationScope},
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  authURL,
+			TokenURL: tokenURL,
+		},
+	}
+}
+
 type Client struct {
 	OAuthConfig      *oauth2.Config
 	AuthorizationURL string
 	AuthCode         string
 	ServerErr        error
 	Token            *oauth2.Token
+	Port             int              // Add Port field
+	Throttle         <-chan time.Time // Add Throttle field. This is a receive-only channel
 }
 
 type redditResponse struct {
@@ -33,43 +62,47 @@ type redditResponse struct {
 	} `json:"data"`
 }
 
-// Ensure reddit.Client implements SocialMedia interface at compile time.
-var _ SocialMedia = &Client{}
-var PORT = 8080
-
 // NewClient You can create a constructor function for reddit.Client which initializes OAuthConfig
 func NewClient() *Client {
 	return &Client{
-		OAuthConfig: &oauth2.Config{
-			ClientID:     os.Getenv("REDDIT_CLIENT_ID"),
-			ClientSecret: os.Getenv("REDDIT_SECRET"),
-			RedirectURL:  fmt.Sprintf("http://localhost:%d/callback", PORT),
-			Scopes:       []string{"read"},
-			Endpoint: oauth2.Endpoint{
-				AuthURL:  "https://www.reddit.com/api/v1/authorize",
-				TokenURL: "https://www.reddit.com/api/v1/access_token",
-			},
-		},
+		OAuthConfig: getOAuthConfig(),
+		Port:        8080,                   // Default port
+		Throttle:    time.Tick(time.Second), // Default rate is 1 request per second
 	}
 }
 
-func fetchSubredditPosts(ctx context.Context, client *http.Client, subreddit string) ([]byte, error) {
-	resp, err := client.Get(fmt.Sprintf("https://oauth.reddit.com/r/%s/new", subreddit))
-	if err != nil {
-		return nil, err
+func NewClientWithToken(token *oauth2.Token) *Client {
+	return &Client{
+		OAuthConfig: getOAuthConfig(),
+		Token:       token,
+		Port:        8080,
+		Throttle:    time.Tick(time.Second),
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Printf("unable to close body")
-		}
-	}(resp.Body)
+}
 
-	return io.ReadAll(resp.Body)
+func (c *Client) StartServer(ctx context.Context) error {
+	log.Printf("Starting http server on port %d", c.Port) // Use the port from the client
+	c.AuthorizationURL = c.OAuthConfig.AuthCodeURL("state", oauth2.AccessTypeOffline)
+
+	http.HandleFunc("/callback", c.callbackHandler)
+	go func() {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", c.Port), nil); err != nil { // Use the port from the client
+			log.Fatalf("ListenAndServe Error: %+v", err)
+		}
+	}()
+
+	// Wait for the authorization code
+	fmt.Printf("Go to the following link in your browser:\n%s\n", c.AuthorizationURL)
+	for c.AuthCode == "" && c.ServerErr == nil {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return c.ServerErr
 }
 
 func (c *Client) FetchPosts(ctx context.Context, subreddit string) ([]Post, error) {
 
+	<-c.Throttle // rate limit our posts respecting the throttle
 	// Create an OAuth2 http.Client with your OAuthConfic
 	httpClient := c.OAuthConfig.Client(ctx, c.Token)
 
@@ -106,36 +139,17 @@ func (c *Client) FetchPosts(ctx context.Context, subreddit string) ([]Post, erro
 	return posts, nil
 }
 
-func (c *Client) StartServer(ctx context.Context) error {
-	log.Printf("Starting http server on port %d", PORT)
-	// Start the HTTP server in a goroutine
-	c.AuthorizationURL = c.OAuthConfig.AuthCodeURL("state", oauth2.AccessTypeOffline)
-
-	http.HandleFunc("/callback", c.callbackHandler)
-	go func() {
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", PORT), nil); err != nil {
-			log.Fatalf("ListenAndServe Error: %+v", err)
-		}
-	}()
-
-	// Wait for the authorization code
-	fmt.Printf("Go to the following link in your browser:\n%s\n", c.AuthorizationURL)
-	for c.AuthCode == "" && c.ServerErr == nil {
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return c.ServerErr
-}
-
 func (c *Client) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	c.AuthCode = r.URL.Query().Get("code")
-	_, c.ServerErr = fmt.Fprintf(w, "Authorization code received. You can close this window now.")
-	if c.ServerErr != nil {
-		log.Fatalf("authorization code received: %s", c.ServerErr)
+	log.Printf("code received: %s", c.AuthCode)
+	_, err := fmt.Fprintf(w, "Authorization code received. You can close this window.")
+	if err != nil {
+		log.Println("Error when writing response in callback:", err)
 	}
 }
 
 func (c *Client) ExchangeAuthCode(ctx context.Context) (*oauth2.Token, error) {
+	<-c.Throttle // limit our requests based on throttle
 	t, err := c.OAuthConfig.Exchange(ctx, c.AuthCode)
 	if err != nil {
 		return nil, err
