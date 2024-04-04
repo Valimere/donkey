@@ -13,18 +13,17 @@ import (
 )
 
 var (
-	//REDDIT_USER_AGENT = os.Getenv("REDDIT_USER_AGENT")
 	REDDIT_CLIENT_ID = os.Getenv("REDDIT_CLIENT_ID")
 	REDDIT_SECRET    = os.Getenv("REDDIT_SECRET")
-	//REDDIT_USERNAME   = os.Getenv("REDDIT_USERNAME")
-	//REDDIT_PASSWORD   = os.Getenv("REDDIT_PASSWORD")
-	DELAY = time.Duration(1)
+	DELAY            = time.Duration(1)
+	authCode         string
+	serverErr        error
 )
 
 var redditOAuthConfig = &oauth2.Config{
 	ClientID:     REDDIT_CLIENT_ID,
 	ClientSecret: REDDIT_SECRET,
-	RedirectURL:  "http://localhost:8080", // Make sure this matches the redirect URI in your Reddit app settings
+	RedirectURL:  "http://localhost:8080/callback",
 	Scopes:       []string{"read"},
 	Endpoint: oauth2.Endpoint{
 		AuthURL:  "https://www.reddit.com/api/v1/authorize",
@@ -46,29 +45,42 @@ func fetchSubredditPosts(ctx context.Context, client *http.Client, subreddit str
 	return ioutil.ReadAll(resp.Body)
 }
 
+func callbackHandler(w http.ResponseWriter, r *http.Request) {
+	authCode = r.URL.Query().Get("code")
+	_, serverErr := fmt.Fprintf(w, "Authorization code received. You can close this window now.")
+	if serverErr != nil {
+		log.Fatalf("authorization code received: %s", serverErr)
+	}
+}
+
+func startServer() {
+	http.HandleFunc("/callback", callbackHandler)
+	http.ListenAndServe(":8080", nil)
+}
+
 func main() {
 	ctx := context.Background()
+	// Start the HTTP server in a goroutine
+	go startServer()
+
 	// Redirect the user to the authorization URL
 	authURL := redditOAuthConfig.AuthCodeURL("state", oauth2.AccessTypeOffline)
 	fmt.Printf("Go to the following link in your browser:\n%s\n", authURL)
-	fmt.Print("Enter the authorization code: ")
-	var authCode string
-	_, err := fmt.Scan(&authCode)
-	if err != nil {
-		log.Fatalf("error reading authcode %s", err)
-	}
-	log.Printf("authcode: %s", authCode)
 
-	time.Sleep(DELAY * time.Second)
+	// Wait for the authorization code
+	for authCode == "" && serverErr == nil {
+		time.Sleep(2 * time.Second)
+	}
+
+	if serverErr != nil {
+		log.Fatalf("Error in server: %s", serverErr)
+	}
+
 	token, err := redditOAuthConfig.Exchange(ctx, authCode)
 	if err != nil {
 		panic(err)
 	}
-	log.Printf("token: %s", token)
 	client := getRedditClient(ctx, token)
-	log.Printf("client: %s", client)
-
-	time.Sleep(DELAY * time.Second)
 
 	subreddit := "news" // Specify the subreddit you want to fetch
 	posts, err := fetchSubredditPosts(ctx, client, subreddit)
