@@ -21,7 +21,7 @@ const (
 
 var (
 	clientID                 = os.Getenv("REDDIT_CLIENT_ID")
-	clientSecret             = os.Getenv("REDDIT_CLIENT_SECRET")
+	clientSecret             = os.Getenv("REDDIT_SECRET")
 	_            SocialMedia = &Client{} // Ensure reddit.Client implements SocialMedia interface at compile time.
 )
 
