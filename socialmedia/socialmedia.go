@@ -5,11 +5,17 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type RedditResponse struct {
+	Before string
+	After  string
+	Posts  []Post
+}
 type Post struct {
-	ID     string
-	Title  string
-	Body   string
-	Author string
+	ID          string
+	Title       string
+	Body        string
+	Author      string
+	NumComments int
 }
 
 type SocialMedia interface {

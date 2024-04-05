@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-var (
-	DELAY = time.Duration(1)
-)
-
 // handleFatalErrors is a helper function to make your error handling more uniform
 func handleFatalErrors(err error, msg string) {
 	if err != nil {
@@ -49,6 +45,35 @@ func parseSubreddits(subredditsArg *string) []string {
 		}
 	}
 	return subreddits
+}
+
+// Fetch and print posts from a single subreddit
+func fetchAndPrint(client *socialmedia.Client, subreddit string) (socialmedia.RedditResponse, error) {
+	resp, err := client.FetchPosts(context.Background(), subreddit)
+	handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
+	fmt.Printf("After: %s\n", resp.After)
+	for _, post := range resp.Posts {
+		fmt.Printf("Post ID: %s, NumComments:%4d ,Author:%24s, Title: %s\n",
+			post.ID, post.NumComments, post.Author, post.Title)
+	}
+	return resp, nil
+}
+
+// Fetch and print posts continuously from a single subreddit
+func continuousFetchAndPrint(client *socialmedia.Client, subreddit string, before string, after string) {
+	for {
+		// Sleep for a specified duration before the next iteration
+		<-client.Throttle
+		resp, err := client.FetchPostsBA(context.Background(), subreddit, before, after)
+		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
+		fmt.Printf("Before: %s, After: %s\n", resp.Before, resp.After)
+		for _, post := range resp.Posts {
+			fmt.Printf("Post ID: %s, NumComments:%4d ,Author:%24s, Title: %s\n",
+				post.ID, post.NumComments, post.Author, post.Title)
+		}
+		before = resp.Before
+		after = resp.After
+	}
 }
 
 func main() {
@@ -97,16 +122,9 @@ func main() {
 		handleFatalErrors(err, "Failed to save the token")
 	}
 
+	var resp socialmedia.RedditResponse
 	for _, subreddit := range subreddits {
-		posts, err := client.FetchPosts(context.Background(), subreddit)
-		handleFatalErrors(err, "Error fetching posts")
-
-		for _, post := range posts {
-			fmt.Printf("Post ID: %s\n", post.ID)
-			fmt.Printf("Title: %s\n", post.Title)
-			fmt.Printf("Body: %s\n", post.Body)
-			fmt.Printf("Author: %s\n", post.Author)
-			fmt.Println()
-		}
+		resp, _ = fetchAndPrint(client, subreddit)
 	}
+	continuousFetchAndPrint(client, subreddits[0], resp.Before, resp.After)
 }
