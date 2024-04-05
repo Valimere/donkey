@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"github.com/Valimere/donkey/db"
 	"github.com/Valimere/donkey/socialmedia"
+	"github.com/Valimere/donkey/statistics"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -53,6 +56,10 @@ func fetchAndPrint(client *socialmedia.Client, subreddit string) (socialmedia.Re
 	handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 	fmt.Printf("After: %s\n", resp.After)
 	for _, post := range resp.Posts {
+		err := statistics.SavePostStatistic(post.ID, post.Author)
+		if err != nil {
+			log.Printf("Failed to save post statistic error:%s\n", err)
+		}
 		fmt.Printf("Post ID: %s, NumComments:%4d ,Author:%24s, Title: %s\n",
 			post.ID, post.NumComments, post.Author, post.Title)
 	}
@@ -68,11 +75,45 @@ func continuousFetchAndPrint(client *socialmedia.Client, subreddit string, befor
 		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 		fmt.Printf("Before: %s, After: %s\n", resp.Before, resp.After)
 		for _, post := range resp.Posts {
+			err := statistics.SavePostStatistic(post.ID, post.Author)
+			if err != nil {
+				log.Printf("Failed to save post statistic error:%s\n", err)
+			}
 			fmt.Printf("Post ID: %s, NumComments:%4d ,Author:%24s, Title: %s\n",
 				post.ID, post.NumComments, post.Author, post.Title)
 		}
 		before = resp.Before
 		after = resp.After
+	}
+}
+
+func printAuthorStatisticsAndExit() {
+	authorStatistics, err := statistics.GetTopPoster()
+
+	if err != nil {
+		fmt.Printf("Error getting author statistics: %s", err)
+		os.Exit(1)
+		return
+	}
+
+	fmt.Printf("\n\nAuthor Statistics:\n")
+	for _, authorStatistic := range *authorStatistics {
+		fmt.Printf("Author: %s, PostsCount: %d\n", authorStatistic.Author, authorStatistic.TotalPosts)
+	}
+
+	os.Exit(0)
+}
+
+func clearAuthorStatistics() {
+	// Clear all rows in the AuthorStatistic table.
+	err := db.DB.Exec("DELETE FROM author_statistics").Error
+	if err != nil {
+		// Log the error
+		log.Println("Error clearing author_statistics:", err)
+	}
+	err = db.DB.Exec("DELETE FROM posts").Error
+	if err != nil {
+		log.Println("error clearing posts:", err)
 	}
 }
 
@@ -84,6 +125,15 @@ func main() {
 	// Configure logging
 	configureLogOutput(logFile)
 
+	// Create a channel to listen for OS signals
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigs
+		printAuthorStatisticsAndExit()
+	}()
+
 	subreddits := parseSubreddits(subredditsArg)
 
 	log.Printf("Subreddits chosen: %v\n", subreddits)
@@ -91,6 +141,7 @@ func main() {
 	// Initialize db connection and create store
 	db.InitDB()
 	store := &db.DBStore{DB: db.DB}
+	clearAuthorStatistics()
 
 	// Check if a token exists in the database
 	dbToken, err := store.GetToken()
@@ -123,8 +174,9 @@ func main() {
 	}
 
 	var resp socialmedia.RedditResponse
-	for _, subreddit := range subreddits {
-		resp, _ = fetchAndPrint(client, subreddit)
-	}
+	//for _, subreddit := range subreddits {
+	//	resp, _ = fetchAndPrint(client, subreddit)
+	//}
+	resp, _ = fetchAndPrint(client, subreddits[0])
 	continuousFetchAndPrint(client, subreddits[0], resp.Before, resp.After)
 }

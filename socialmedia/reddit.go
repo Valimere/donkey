@@ -125,7 +125,7 @@ func NewClientWithToken(token *oauth2.Token) *Client {
 		Token:       token,
 		HttpClient:  httpClient,
 		Port:        8080,
-		Throttle:    time.Tick(time.Second * 4),
+		Throttle:    time.Tick(time.Second),
 		Context:     ctx,
 	}
 }
@@ -148,8 +148,8 @@ func (c *Client) StartServer(ctx context.Context) error {
 
 func (c *Client) FetchPosts(ctx context.Context, subreddit string) (RedditResponse, error) {
 	<-c.Throttle
-	url := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
-	req, err := http.NewRequest("GET", url, nil)
+	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
+	req, err := http.NewRequest("GET", baseURL, nil)
 	if err != nil {
 		return RedditResponse{}, err
 	}

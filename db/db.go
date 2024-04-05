@@ -24,6 +24,26 @@ type Token struct {
 	ExpiresAt time.Time
 }
 
+// Post represents the schema for the "posts" table
+type Post struct {
+	gorm.Model
+	PostID      string
+	Author      string
+	Subreddit   string
+	Title       string
+	UpVotes     int
+	NumComments int
+}
+
+// AuthorStatistic represents the schema for the "author_statistics" table
+type AuthorStatistic struct {
+	gorm.Model
+	Author        string
+	TotalPosts    int
+	TotalUpvotes  int
+	TotalComments int
+}
+
 var DB *gorm.DB
 
 func InitDB() {
@@ -33,7 +53,7 @@ func InitDB() {
 		log.Fatalf("Error while connecting to the database: %s", err)
 	}
 
-	err = DB.AutoMigrate(&Token{})
+	err = DB.AutoMigrate(&Token{}, &Post{}, &AuthorStatistic{})
 	if err != nil {
 		log.Fatalf("Error while migrating the database: %s", err)
 	}
@@ -48,7 +68,10 @@ func (s *DBStore) SaveToken(token *oauth2.Token) error {
 	dbToken := &Token{
 		OAuthData: string(data),
 	}
-	s.DB.Save(dbToken)
+	result := s.DB.Save(dbToken)
+	if result.Error != nil {
+		return result.Error
+	}
 	return nil
 }
 
