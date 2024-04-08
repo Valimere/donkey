@@ -67,6 +67,7 @@ func (s *DBStore) SaveToken(token *oauth2.Token) error {
 
 	dbToken := &Token{
 		OAuthData: string(data),
+		ExpiresAt: token.Expiry,
 	}
 	result := s.DB.Save(dbToken)
 	if result.Error != nil {
@@ -77,7 +78,7 @@ func (s *DBStore) SaveToken(token *oauth2.Token) error {
 
 func (s *DBStore) GetToken() (*oauth2.Token, error) {
 	var token Token
-	err := s.DB.First(&token).Error
+	err := s.DB.Order("created_at desc").First(&token).Error
 	if err != nil {
 		return nil, err
 	}

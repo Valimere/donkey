@@ -56,7 +56,7 @@ func fetchAndPrint(client *socialmedia.Client, subreddit string) (socialmedia.Re
 	handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 	fmt.Printf("After: %s\n", resp.After)
 	for _, post := range resp.Posts {
-		err := statistics.SavePostStatistic(post.ID, post.Author)
+		err := statistics.SaveUniquePost(post.ID, post.Author)
 		if err != nil {
 			log.Printf("Failed to save post statistic error:%s\n", err)
 		}
@@ -75,7 +75,7 @@ func continuousFetchAndPrint(client *socialmedia.Client, subreddit string, befor
 		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 		fmt.Printf("Before: %s, After: %s\n", resp.Before, resp.After)
 		for _, post := range resp.Posts {
-			err := statistics.SavePostStatistic(post.ID, post.Author)
+			err := statistics.SaveUniquePost(post.ID, post.Author)
 			if err != nil {
 				log.Printf("Failed to save post statistic error:%s\n", err)
 			}

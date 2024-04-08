@@ -154,6 +154,7 @@ func (c *Client) FetchPosts(ctx context.Context, subreddit string) (RedditRespon
 		return RedditResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
 		return RedditResponse{}, err
@@ -168,6 +169,9 @@ func (c *Client) FetchPosts(ctx context.Context, subreddit string) (RedditRespon
 	if err != nil {
 		log.Printf("\nUnparsable: \n%s\n", body)
 		return RedditResponse{}, err
+	} else {
+		log.Printf("Ratelimit-Remaining: %s, Ratelimit-Reset: %s, Ratelimit-Used: %s\n",
+			resp.Header.Get("X-Ratelimit-Remaining"), resp.Header.Get("X-Ratelimit-Reset"), resp.Header.Get("X-Ratelimit-Used"))
 	}
 	rr := RedditResponse{
 		Before: jsonData.Data.Before,
@@ -207,6 +211,7 @@ func (c *Client) FetchPostsBA(ctx context.Context, subreddit string, before stri
 		return RedditResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
 		return RedditResponse{}, err
@@ -221,6 +226,10 @@ func (c *Client) FetchPostsBA(ctx context.Context, subreddit string, before stri
 	if err != nil {
 		log.Printf("\nUnparsable: \n%s\n", body)
 		return RedditResponse{}, err
+	} else {
+		log.Println(resp)
+		log.Printf("Ratelimit-Remaining: %s, Ratelimit-Reset: %s, Ratelimit-Used: %s\n",
+			resp.Header.Get("X-Ratelimit-Remaining"), resp.Header.Get("X-Ratelimit-Reset"), resp.Header.Get("X-Ratelimit-Used"))
 	}
 	rr := RedditResponse{
 		Before: jsonData.Data.Before,
