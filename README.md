@@ -13,12 +13,11 @@ export REDDIT_USER_AGENT=
 Usage of ./donkey:
   -debug
     	enable debug mode
-  -log string
-    	path to log file (optional)
   -r string
-    	comma-separated list of subreddits i.e. "funny, music" (default "music")
+    	comma-separated list of subreddits i.e. "Askreddit, music" (default "Askreddit")
     	
 % ./donkey -r "AskReddit, funny, gaming, aww, music, todayilearned, movies, science, showerthoughts"
+ctl + c to quit
 ```
 
 ## Assignment:

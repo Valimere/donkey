@@ -24,18 +24,6 @@ func handleFatalErrors(err error, msg string) {
 	}
 }
 
-// configureLogOutput : set the log output destination
-func configureLogOutput(filepath *string) {
-	if *filepath != "" {
-		file, err := os.OpenFile(*filepath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		handleFatalErrors(err, "Error opening log file")
-		defer file.Close()
-		log.SetOutput(file)
-	} else {
-		log.SetOutput(os.Stdout)
-	}
-}
-
 // parseSubreddits : Clean up the subreddits input
 func parseSubreddits(subredditsArg *string) []string {
 	// Split the subredditsArg into a slice of uncleanSubreddits
@@ -127,13 +115,9 @@ func clearStatistics(dbStore store.Store) {
 }
 
 func main() {
-	subredditsArg := flag.String("r", "music", "comma-separated list of subreddits i.e. \"funny, music\"")
-	logFile := flag.String("log", "", "path to log file (optional)")
+	subredditsArg := flag.String("r", "Askreddit", "comma-separated list of subreddits i.e. \"Askreddit, music\"")
 	debugFlag := flag.Bool("debug", false, "enable debug mode")
 	flag.Parse()
-
-	// Configure logging
-	configureLogOutput(logFile)
 
 	// Initialize db connection and create store
 	dbInstance, err := db.InitDB(*debugFlag)
