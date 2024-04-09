@@ -7,12 +7,13 @@ import (
 )
 
 type RedditResponse struct {
-	Before string
-	After  string
-	Posts  []Post
+	Before    string
+	After     string
+	Subreddit string
+	Posts     []Post
 }
 type Post struct {
-	ID          string
+	PostID      string
 	Title       string
 	Body        string
 	Author      string

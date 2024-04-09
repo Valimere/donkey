@@ -3,6 +3,7 @@ package socialmedia
 import (
 	"context"
 	"encoding/json"
+	"golang.org/x/time/rate"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -32,6 +33,7 @@ type Client struct {
 	OAuthConfig      *oauth2.Config
 	AuthorizationURL string
 	AuthCode         string
+	RateLimiter      *rate.Limiter
 	ServerErr        error
 	Token            *oauth2.Token
 	Port             int
@@ -39,6 +41,7 @@ type Client struct {
 	HttpClient       *http.Client
 	Context          context.Context
 	Debug            bool
+	ProgramStartTime time.Time
 }
 
 type redditResponse struct {
@@ -47,13 +50,14 @@ type redditResponse struct {
 		Before   string `json:"before"`
 		Children []struct {
 			Data struct {
-				ID          string  `json:"id"`
+				PostID      string  `json:"id"`
 				Title       string  `json:"title"`
 				SelfText    string  `json:"selftext"`
 				Author      string  `json:"author"`
 				NumComments int     `json:"num_comments"`
 				UpVotes     int     `json:"ups"`
 				CreatedUTC  float64 `json:"created_utc"`
+				Subreddit   string  `json:"subreddit"`
 			} `json:"data"`
 		} `json:"children"`
 	} `json:"data"`
@@ -100,6 +104,7 @@ func getOAuthConfig() *oauth2.Config {
 }
 
 func NewClient(debugFlag bool) *Client {
+	limiter := rate.NewLimiter(rate.Every(time.Minute/60), 1)
 	httpClient := &http.Client{
 		Transport: &dumpTransport{
 			transport: &Transport{
@@ -110,16 +115,19 @@ func NewClient(debugFlag bool) *Client {
 	}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, httpClient)
 	return &Client{
-		OAuthConfig: getOAuthConfig(),
-		HttpClient:  httpClient,
-		Port:        8080,
-		Throttle:    time.Tick(time.Second),
-		Context:     ctx,
-		Debug:       debugFlag,
+		OAuthConfig:      getOAuthConfig(),
+		HttpClient:       httpClient,
+		Port:             8080,
+		RateLimiter:      limiter,
+		Throttle:         time.Tick(time.Second),
+		Context:          ctx,
+		Debug:            debugFlag,
+		ProgramStartTime: time.Now(),
 	}
 }
 
 func NewClientWithToken(token *oauth2.Token, debugFlag bool) *Client {
+	limiter := rate.NewLimiter(rate.Every(time.Minute/60), 1)
 	httpClient := &http.Client{
 		Transport: &dumpTransport{
 			transport: &Transport{
@@ -130,13 +138,15 @@ func NewClientWithToken(token *oauth2.Token, debugFlag bool) *Client {
 	}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, httpClient)
 	return &Client{
-		OAuthConfig: getOAuthConfig(),
-		Token:       token,
-		HttpClient:  httpClient,
-		Port:        8080,
-		Throttle:    time.Tick(time.Second),
-		Context:     ctx,
-		Debug:       debugFlag,
+		OAuthConfig:      getOAuthConfig(),
+		Token:            token,
+		HttpClient:       httpClient,
+		Port:             8080,
+		RateLimiter:      limiter,
+		Throttle:         time.Tick(time.Second),
+		Context:          ctx,
+		Debug:            debugFlag,
+		ProgramStartTime: time.Now(),
 	}
 }
 
@@ -174,13 +184,14 @@ func processRedditResponse(resp *http.Response) (RedditResponse, error) {
 	for _, child := range jsonData.Data.Children {
 		createdTime := time.Unix(int64(child.Data.CreatedUTC), 0).UTC()
 		rr.Posts = append(rr.Posts, Post{
-			ID:          child.Data.ID,
+			PostID:      child.Data.PostID,
 			Title:       child.Data.Title,
 			Body:        child.Data.SelfText,
 			Author:      child.Data.Author,
 			NumComments: child.Data.NumComments,
 			UpVotes:     child.Data.UpVotes,
 			Created:     createdTime,
+			SubReddit:   child.Data.Subreddit,
 		})
 	}
 	return rr, nil
@@ -204,8 +215,11 @@ type PaginationOptions struct {
 //	client := &Client{}
 //	resp, err := client.FetchPosts(context.Background(), "golang")
 func (c *Client) FetchPosts(ctx context.Context, subreddit string, opts ...PaginationOptions) (RedditResponse, error) {
-	// Throttling requests
-	<-c.Throttle
+	// wait for permission to proceed under the rate limit
+	err := c.RateLimiter.Wait(ctx)
+	if err != nil {
+		return RedditResponse{}, err
+	}
 	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
 	req, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
 	if err != nil {
@@ -228,10 +242,11 @@ func (c *Client) FetchPosts(ctx context.Context, subreddit string, opts ...Pagin
 	}
 
 	// Inspect rate limit headers right after the HTTP request is made
-	log.Printf("Ratelimit-Used: %s, Ratelimit-Remaining: %s, Ratelimit-Reset: %s\n",
+	log.Printf("Ratelimit-Used: %s, Ratelimit-Remaining: %s, Ratelimit-Reset: %s, URL: %s\n",
 		resp.Header.Get("X-Ratelimit-Used"),
 		resp.Header.Get("X-Ratelimit-Remaining"),
-		resp.Header.Get("X-Ratelimit-Reset"))
+		resp.Header.Get("X-Ratelimit-Reset"),
+		baseURL)
 	defer resp.Body.Close()
 	return processRedditResponse(resp)
 }

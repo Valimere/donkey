@@ -115,7 +115,7 @@ func (s *DbStore) GetToken() (*oauth2.Token, error) {
 func (s *DbStore) TransformToDBPost(p *socialmedia.Post) *Post {
 	return &Post{
 		Model:       gorm.Model{},
-		PostID:      p.ID,
+		PostID:      p.PostID,
 		Author:      p.Author,
 		Subreddit:   p.SubReddit,
 		Title:       p.Title,
@@ -162,8 +162,8 @@ func (s *DbStore) SaveAuthorStatistic(p *socialmedia.Post) error {
 			TotalUpvotes:  p.UpVotes,
 			TotalComments: p.NumComments,
 		}
-		fmt.Printf("New Post found, PostID: %s, Upvotes: %4d Comments: %4d, Author: %24s, Title: %24s\n",
-			p.ID, p.UpVotes, p.NumComments, p.Author, p.Title)
+		fmt.Printf("New Post found, PostID: %s, Upvotes: %4d Comments: %4d, Author: %24s, Subreddit %12s, Title: %24s\n",
+			p.PostID, p.UpVotes, p.NumComments, p.Author, p.SubReddit, p.Title)
 		result = tx.Create(&dbAuthorStatistic)
 	} else if result.Error != nil {
 		tx.Rollback()

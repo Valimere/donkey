@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -53,23 +54,36 @@ func parseSubreddits(subredditsArg *string) []string {
 }
 
 // Fetch and print posts from a single subreddit
-func fetchAndPrint(client *socialmedia.Client, subreddit string, dbStore store.Store) {
-	var after string
-	for {
-		resp, err := client.FetchPosts(context.Background(), subreddit, socialmedia.PaginationOptions{After: after})
-		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
-		for _, post := range resp.Posts {
-			err := statistics.SaveUniquePost(dbStore, &post)
-			if err != nil {
-				log.Printf("Failed to save post statistic error:%s\n", err)
+func fetchAndPrint(client *socialmedia.Client, subreddits []string, dbStore store.Store) {
+	var wg sync.WaitGroup
+
+	for _, subreddit := range subreddits {
+		wg.Add(1)
+		go func(subreddit string) {
+			defer wg.Done()
+			var after string
+			for {
+				resp, err := client.FetchPosts(context.Background(), subreddit, socialmedia.PaginationOptions{After: after})
+				handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
+				for _, post := range resp.Posts {
+					if post.Created.After(client.ProgramStartTime) {
+						err := statistics.SaveUniquePost(dbStore, &post)
+						if err != nil {
+							log.Printf("Failed to save post statistic error:%s\n", err)
+						}
+						if client.Debug {
+							fmt.Printf("Post PostID: %s, NumComments:%4d, Subreddit: %12s, Author:%24s, Title: %s\n",
+								post.PostID, post.NumComments, post.SubReddit, post.Author, post.Title)
+						}
+					}
+
+				}
+				after = resp.After
 			}
-			if client.Debug {
-				fmt.Printf("Post ID: %s, NumComments:%4d ,Author:%24s, Title: %s\n",
-					post.ID, post.NumComments, post.Author, post.Title)
-			}
-		}
-		after = resp.After
+		}(subreddit)
 	}
+	wg.Wait()
+
 }
 
 func printStatisticsAndExit(dbStore store.Store) {
@@ -90,10 +104,10 @@ func printStatisticsAndExit(dbStore store.Store) {
 		os.Exit(1)
 		return
 	}
+	fmt.Printf("\n\nPost Statistics:\n")
 	for _, postStatistic := range postStatistics {
-		fmt.Printf("\n\nPost Statistics:\n")
-		fmt.Printf("Post ID: %s, Author: %s, UpVotes: %d, Comments: %d\n",
-			postStatistic.ID, postStatistic.Author, postStatistic.UpVotes, postStatistic.NumComments)
+		fmt.Printf("Post PostID: %8s, UpVotes: %4d, Comments: %4d, Author: %24s\n",
+			postStatistic.PostID, postStatistic.UpVotes, postStatistic.NumComments, postStatistic.Author)
 	}
 
 	os.Exit(0)
@@ -171,5 +185,5 @@ func main() {
 		handleFatalErrors(err, "Failed to save the token")
 	}
 
-	fetchAndPrint(smClient, subreddits[0], dbStore)
+	fetchAndPrint(smClient, subreddits, dbStore)
 }
