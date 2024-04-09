@@ -179,7 +179,7 @@ func processRedditResponse(resp *http.Response) (RedditResponse, error) {
 			Body:        child.Data.SelfText,
 			Author:      child.Data.Author,
 			NumComments: child.Data.NumComments,
-			Upvotes:     child.Data.UpVotes,
+			UpVotes:     child.Data.UpVotes,
 			Created:     createdTime,
 		})
 	}
@@ -206,7 +206,7 @@ type PaginationOptions struct {
 func (c *Client) FetchPosts(ctx context.Context, subreddit string, opts ...PaginationOptions) (RedditResponse, error) {
 	// Throttling requests
 	<-c.Throttle
-	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/hot.json", subreddit)
+	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
 	req, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
 	if err != nil {
 		return RedditResponse{}, err

@@ -17,8 +17,16 @@ type Post struct {
 	Body        string
 	Author      string
 	NumComments int
-	Upvotes     int
+	UpVotes     int
 	Created     time.Time
+	SubReddit   string
+}
+
+type AuthorStatistic struct {
+	Author        string
+	TotalPosts    int
+	TotalUpvotes  int
+	TotalComments int
 }
 
 type SocialMedia interface {

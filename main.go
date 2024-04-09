@@ -7,6 +7,7 @@ import (
 	"github.com/Valimere/donkey/db"
 	"github.com/Valimere/donkey/socialmedia"
 	"github.com/Valimere/donkey/statistics"
+	"github.com/Valimere/donkey/store"
 	"log"
 	"os"
 	"os/signal"
@@ -47,17 +48,18 @@ func parseSubreddits(subredditsArg *string) []string {
 			subreddits = append(subreddits, subreddit)
 		}
 	}
+	log.Printf("Subreddits chosen: %v\n", subreddits)
 	return subreddits
 }
 
 // Fetch and print posts from a single subreddit
-func fetchAndPrint(client *socialmedia.Client, subreddit string) {
+func fetchAndPrint(client *socialmedia.Client, subreddit string, dbStore store.Store) {
 	var after string
 	for {
 		resp, err := client.FetchPosts(context.Background(), subreddit, socialmedia.PaginationOptions{After: after})
 		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 		for _, post := range resp.Posts {
-			err := statistics.SaveUniquePost(post.ID, post.Author, post.Title, post.Upvotes, post.NumComments)
+			err := statistics.SaveUniquePost(dbStore, &post)
 			if err != nil {
 				log.Printf("Failed to save post statistic error:%s\n", err)
 			}
@@ -70,9 +72,8 @@ func fetchAndPrint(client *socialmedia.Client, subreddit string) {
 	}
 }
 
-func printStatisticsAndExit() {
-	authorStatistics, err := statistics.GetTopPoster()
-
+func printStatisticsAndExit(dbStore store.Store) {
+	authorStatistics, err := statistics.GetTopPoster(dbStore)
 	if err != nil {
 		fmt.Printf("Error getting author statistics: %s\n", err)
 		os.Exit(1)
@@ -80,31 +81,32 @@ func printStatisticsAndExit() {
 	}
 
 	fmt.Printf("\n\nAuthor Statistics:\n")
-	for _, authorStatistic := range *authorStatistics {
+	for _, authorStatistic := range authorStatistics {
 		fmt.Printf("Author: %s, PostsCount: %d\n", authorStatistic.Author, authorStatistic.TotalPosts)
 	}
-	postStatistics, err := statistics.GetTopPosts()
+	postStatistics, err := statistics.GetTopPosts(dbStore)
 	if err != nil {
 		fmt.Printf("Error in getting post statistics %s\n", err)
 		os.Exit(1)
 		return
 	}
-	for _, postStatistic := range *postStatistics {
+	for _, postStatistic := range postStatistics {
 		fmt.Printf("\n\nPost Statistics:\n")
-		fmt.Printf("Post ID: %s, Author: %s, UpVotes: %d, Comments: %d\n", postStatistic.PostID, postStatistic.Author, postStatistic.UpVotes, postStatistic.NumComments)
+		fmt.Printf("Post ID: %s, Author: %s, UpVotes: %d, Comments: %d\n",
+			postStatistic.ID, postStatistic.Author, postStatistic.UpVotes, postStatistic.NumComments)
 	}
 
 	os.Exit(0)
 }
 
-func clearAuthorStatistics() {
+func clearStatistics(dbStore store.Store) {
 	// Clear all rows in the AuthorStatistic table.
-	err := db.DB.Exec("DELETE FROM author_statistics").Error
+	err := dbStore.ClearAuthorStatistics()
 	if err != nil {
 		// Log the error
 		log.Println("Error clearing author_statistics:", err)
 	}
-	err = db.DB.Exec("DELETE FROM posts").Error
+	err = dbStore.ClearPosts()
 	if err != nil {
 		log.Println("error clearing posts:", err)
 	}
@@ -119,26 +121,17 @@ func main() {
 	// Configure logging
 	configureLogOutput(logFile)
 
-	// Create a channel to listen for OS signals, print statistics on ctl + c
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigs
-		printStatisticsAndExit()
-	}()
-
-	subreddits := parseSubreddits(subredditsArg)
-
-	log.Printf("Subreddits chosen: %v\n", subreddits)
-
 	// Initialize db connection and create store
-	db.InitDB(*debugFlag)
-	store := &db.DBStore{DB: db.DB}
-	clearAuthorStatistics()
+	dbInstance, err := db.InitDB(*debugFlag)
+	if err != nil {
+		handleFatalErrors(err, "Failed to initialize database: ")
+	}
+
+	var dbStore store.Store = &db.DbStore{DB: dbInstance}
+	clearStatistics(dbStore)
 
 	// Check if a token exists in the database
-	dbToken, err := store.GetToken()
+	dbToken, err := dbStore.GetToken()
 	if err != nil {
 		if err.Error() == "record not found" {
 			log.Println("No existing token found in the database. Requesting a new one.")
@@ -147,25 +140,36 @@ func main() {
 		}
 	}
 
-	var client *socialmedia.Client
+	// Create a channel to listen for OS signals, print statistics on ctl + c
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigs
+		printStatisticsAndExit(dbStore)
+	}()
+
+	subreddits := parseSubreddits(subredditsArg)
+
+	var smClient *socialmedia.Client
 
 	if dbToken.Valid() && !dbToken.Expiry.Before(time.Now()) {
 		// If the token exists, and it has not expired, use it
-		client = socialmedia.NewClientWithToken(dbToken, *debugFlag)
+		smClient = socialmedia.NewClientWithToken(dbToken, *debugFlag)
 	} else {
-		client = socialmedia.NewClient(*debugFlag)
+		smClient = socialmedia.NewClient(*debugFlag)
 
-		serverErr := client.StartServer(context.Background())
+		serverErr := smClient.StartServer(context.Background())
 		handleFatalErrors(serverErr, "Error in server")
 
-		token, err := client.ExchangeAuthCode(context.Background())
+		token, err := smClient.ExchangeAuthCode(context.Background())
 		handleFatalErrors(err, "Failed to exchange auth code")
 
 		log.Printf("token received: %s", token.AccessToken)
 
-		err = store.SaveToken(token)
+		err = dbStore.SaveToken(token)
 		handleFatalErrors(err, "Failed to save the token")
 	}
 
-	fetchAndPrint(client, subreddits[0])
+	fetchAndPrint(smClient, subreddits[0], dbStore)
 }
