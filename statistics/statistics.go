@@ -1,43 +1,60 @@
 package statistics
 
 import (
+	"errors"
+	"fmt"
 	"github.com/Valimere/donkey/db"
 	"gorm.io/gorm"
+	"strings"
 )
 
-func SaveUniquePost(postID, author string, upvotes, comments int) error {
-	post := db.Post{PostID: postID, Author: author, UpVotes: upvotes, NumComments: comments}
+func SaveUniquePost(postID, author, title string, upvotes, comments int) error {
+	post := db.Post{
+		PostID:      postID,
+		Author:      author,
+		UpVotes:     upvotes,
+		Title:       title,
+		NumComments: comments}
 	result := db.DB.FirstOrCreate(&post, post)
 
 	if result.Error != nil {
-		return result.Error
-	}
-
-	var statistic db.AuthorStatistic
-	result = db.DB.Where("author = ?", author).First(&statistic)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			// If the statistic record doesn't exist yet, create a new one.
-			statistic := db.AuthorStatistic{
-				Author:        author,
-				TotalPosts:    1,
-				TotalUpvotes:  upvotes,
-				TotalComments: comments,
-			}
-			result = db.DB.Create(&statistic)
+		// no need to print sqlite post is not unique info
+		if strings.Contains(result.Error.Error(), "UNIQUE constraint failed") {
+			return nil
 		}
-	} else {
-		// If the statistic record exists, increment corresponding values
-		statistic.TotalPosts++
-		statistic.TotalUpvotes += upvotes
-		statistic.TotalComments += comments
-		result = db.DB.Save(&statistic)
-	}
-
-	if result.Error != nil {
 		return result.Error
 	}
 
+	if result.RowsAffected > 0 {
+		var statistic db.AuthorStatistic
+		result = db.DB.Where("author = ?", author).First(&statistic)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				statistic = db.AuthorStatistic{
+					Author:        author,
+					TotalPosts:    1,
+					TotalUpvotes:  upvotes,
+					TotalComments: comments,
+				}
+				result = db.DB.Create(&statistic)
+				fmt.Printf("New Post found, PostID: %s, Author: %24s, Title: %24s, Upvotes: %4d Comments: %4d\n",
+					postID, author, title, upvotes, comments)
+			} else if strings.Contains(result.Error.Error(), "UNIQUE constraint failed") {
+				return nil
+			} else {
+				return result.Error
+			}
+		} else {
+			statistic.TotalPosts++
+			statistic.TotalUpvotes += upvotes
+			statistic.TotalComments += comments
+			result = db.DB.Save(&statistic)
+		}
+
+		if result.Error != nil {
+			return result.Error
+		}
+	}
 	return nil
 }
 

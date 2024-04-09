@@ -206,7 +206,7 @@ type PaginationOptions struct {
 func (c *Client) FetchPosts(ctx context.Context, subreddit string, opts ...PaginationOptions) (RedditResponse, error) {
 	// Throttling requests
 	<-c.Throttle
-	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
+	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/hot.json", subreddit)
 	req, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
 	if err != nil {
 		return RedditResponse{}, err

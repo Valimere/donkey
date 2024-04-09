@@ -24,7 +24,6 @@ func handleFatalErrors(err error, msg string) {
 
 // configureLogOutput : set the log output destination
 func configureLogOutput(filepath *string) {
-
 	if *filepath != "" {
 		file, err := os.OpenFile(*filepath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		handleFatalErrors(err, "Error opening log file")
@@ -53,11 +52,12 @@ func parseSubreddits(subredditsArg *string) []string {
 
 // Fetch and print posts from a single subreddit
 func fetchAndPrint(client *socialmedia.Client, subreddit string) {
+	var after string
 	for {
-		resp, err := client.FetchPosts(context.Background(), subreddit)
+		resp, err := client.FetchPosts(context.Background(), subreddit, socialmedia.PaginationOptions{After: after})
 		handleFatalErrors(err, fmt.Sprintf("Error fetching posts for subreddit: %s", subreddit))
 		for _, post := range resp.Posts {
-			err := statistics.SaveUniquePost(post.ID, post.Author, post.Upvotes, post.NumComments)
+			err := statistics.SaveUniquePost(post.ID, post.Author, post.Title, post.Upvotes, post.NumComments)
 			if err != nil {
 				log.Printf("Failed to save post statistic error:%s\n", err)
 			}
@@ -66,6 +66,7 @@ func fetchAndPrint(client *socialmedia.Client, subreddit string) {
 					post.ID, post.NumComments, post.Author, post.Title)
 			}
 		}
+		after = resp.After
 	}
 }
 

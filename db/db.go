@@ -5,7 +5,9 @@ import (
 	"golang.org/x/oauth2"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"log"
+	"os"
 	"time"
 )
 
@@ -27,7 +29,7 @@ type Token struct {
 // Post represents the schema for the "posts" table
 type Post struct {
 	gorm.Model
-	PostID      string
+	PostID      string `gorm:"unique"`
 	Author      string
 	Subreddit   string
 	Title       string
@@ -48,7 +50,20 @@ var DB *gorm.DB
 
 func InitDB(debugFlag bool) {
 	var err error
-	DB, err = gorm.Open(sqlite.Open("donkey.db"), &gorm.Config{})
+	var logLevel logger.LogLevel
+
+	if debugFlag {
+		logLevel = logger.Info
+	} else {
+		logLevel = logger.Silent
+	}
+	newLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold: time.Second,
+			LogLevel:      logLevel,
+		})
+	DB, err = gorm.Open(sqlite.Open("donkey.db"), &gorm.Config{Logger: newLogger})
 	if err != nil {
 		log.Fatalf("Error while connecting to the database: %s", err)
 	}
