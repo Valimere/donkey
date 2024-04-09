@@ -46,7 +46,7 @@ type AuthorStatistic struct {
 
 var DB *gorm.DB
 
-func InitDB() {
+func InitDB(debugFlag bool) {
 	var err error
 	DB, err = gorm.Open(sqlite.Open("donkey.db"), &gorm.Config{})
 	if err != nil {

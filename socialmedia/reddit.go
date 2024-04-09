@@ -38,6 +38,7 @@ type Client struct {
 	Throttle         <-chan time.Time
 	HttpClient       *http.Client
 	Context          context.Context
+	Debug            bool
 }
 
 type redditResponse struct {
@@ -46,11 +47,13 @@ type redditResponse struct {
 		Before   string `json:"before"`
 		Children []struct {
 			Data struct {
-				ID          string `json:"id"`
-				Title       string `json:"title"`
-				SelfText    string `json:"selftext"`
-				Author      string `json:"author"`
-				NumComments int    `json:"num_comments"`
+				ID          string  `json:"id"`
+				Title       string  `json:"title"`
+				SelfText    string  `json:"selftext"`
+				Author      string  `json:"author"`
+				NumComments int     `json:"num_comments"`
+				UpVotes     int     `json:"ups"`
+				CreatedUTC  float64 `json:"created_utc"`
 			} `json:"data"`
 		} `json:"children"`
 	} `json:"data"`
@@ -66,17 +69,20 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type dumpTransport struct {
 	transport *Transport
+	Debug     bool
 }
 
 func (d *dumpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Add User-Agent Header to request
 	req.Header.Add("User-Agent", d.transport.UserAgent)
 
-	dump, err := httputil.DumpRequestOut(req, false)
-	if err != nil {
-		return nil, err
+	if d.Debug {
+		dump, err := httputil.DumpRequestOut(req, false)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("HTTP Request:\n%s\n", dump)
 	}
-	log.Printf("HTTP Request:\n%s\n", dump)
 	return d.transport.RoundTrip(req)
 }
 
@@ -93,12 +99,13 @@ func getOAuthConfig() *oauth2.Config {
 	}
 }
 
-func NewClient() *Client {
+func NewClient(debugFlag bool) *Client {
 	httpClient := &http.Client{
 		Transport: &dumpTransport{
 			transport: &Transport{
 				UserAgent: userAgent,
 			},
+			Debug: debugFlag,
 		},
 	}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, httpClient)
@@ -108,15 +115,17 @@ func NewClient() *Client {
 		Port:        8080,
 		Throttle:    time.Tick(time.Second),
 		Context:     ctx,
+		Debug:       debugFlag,
 	}
 }
 
-func NewClientWithToken(token *oauth2.Token) *Client {
+func NewClientWithToken(token *oauth2.Token, debugFlag bool) *Client {
 	httpClient := &http.Client{
 		Transport: &dumpTransport{
 			transport: &Transport{
 				UserAgent: userAgent,
 			},
+			Debug: debugFlag,
 		},
 	}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, httpClient)
@@ -127,6 +136,7 @@ func NewClientWithToken(token *oauth2.Token) *Client {
 		Port:        8080,
 		Throttle:    time.Tick(time.Second),
 		Context:     ctx,
+		Debug:       debugFlag,
 	}
 }
 
@@ -146,107 +156,98 @@ func (c *Client) StartServer(ctx context.Context) error {
 	return c.ServerErr
 }
 
-func (c *Client) FetchPosts(ctx context.Context, subreddit string) (RedditResponse, error) {
+func processRedditResponse(resp *http.Response) (RedditResponse, error) {
+	var jsonData redditResponse
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return RedditResponse{}, err
+	}
+	err = json.Unmarshal(body, &jsonData)
+	if err != nil {
+		log.Printf("\nUnparsable: \n%s\n", body)
+		return RedditResponse{}, err
+	}
+	rr := RedditResponse{
+		Before: jsonData.Data.Before,
+		After:  jsonData.Data.After,
+	}
+	for _, child := range jsonData.Data.Children {
+		createdTime := time.Unix(int64(child.Data.CreatedUTC), 0).UTC()
+		rr.Posts = append(rr.Posts, Post{
+			ID:          child.Data.ID,
+			Title:       child.Data.Title,
+			Body:        child.Data.SelfText,
+			Author:      child.Data.Author,
+			NumComments: child.Data.NumComments,
+			Upvotes:     child.Data.UpVotes,
+			Created:     createdTime,
+		})
+	}
+	return rr, nil
+}
+
+type PaginationOptions struct {
+	Before string
+	After  string
+}
+
+// FetchPosts retrieves the latest posts from a subreddit using the Reddit API.
+// It makes a GET request to the subreddit's "new" endpoint and returns a RedditResponse object containing the posts.
+// The method utilizes the client's Throttle channel to throttle requests.
+// The method requires the subreddit name as the first argument and supports optional PaginationOptions.
+// If provided, PaginationOptions determine the "before" and "after" query parameters in the request URL.
+// The method sets the "Accept" and "Authorization" headers in the request and handles any errors that occur during the HTTP request.
+// It also logs information about the rate limit headers received in the HTTP response.
+// The method returns the RedditResponse and an error if one occurs.
+// Example usage:
+//
+//	client := &Client{}
+//	resp, err := client.FetchPosts(context.Background(), "golang")
+func (c *Client) FetchPosts(ctx context.Context, subreddit string, opts ...PaginationOptions) (RedditResponse, error) {
+	// Throttling requests
 	<-c.Throttle
 	baseURL := fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit)
-	req, err := http.NewRequest("GET", baseURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil)
 	if err != nil {
 		return RedditResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
+	if len(opts) > 0 {
+		params := url.Values{}
+		if opts[0].Before != "" {
+			params.Add("before", opts[0].Before)
+		}
+		if opts[0].After != "" {
+			params.Add("after", opts[0].After)
+		}
+	}
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
 		return RedditResponse{}, err
 	}
+
+	// Inspect rate limit headers right after the HTTP request is made
+	log.Printf("Ratelimit-Used: %s, Ratelimit-Remaining: %s, Ratelimit-Reset: %s\n",
+		resp.Header.Get("X-Ratelimit-Used"),
+		resp.Header.Get("X-Ratelimit-Remaining"),
+		resp.Header.Get("X-Ratelimit-Reset"))
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return RedditResponse{}, err
-	}
-	var jsonData redditResponse
-	err = json.Unmarshal(body, &jsonData)
-	if err != nil {
-		log.Printf("\nUnparsable: \n%s\n", body)
-		return RedditResponse{}, err
-	} else {
-		log.Printf("Ratelimit-Remaining: %s, Ratelimit-Reset: %s, Ratelimit-Used: %s\n",
-			resp.Header.Get("X-Ratelimit-Remaining"), resp.Header.Get("X-Ratelimit-Reset"), resp.Header.Get("X-Ratelimit-Used"))
-	}
-	rr := RedditResponse{
-		Before: jsonData.Data.Before,
-		After:  jsonData.Data.After,
-	}
-	for _, child := range jsonData.Data.Children {
-		rr.Posts = append(rr.Posts, Post{
-			ID:          child.Data.ID,
-			Title:       child.Data.Title,
-			Body:        child.Data.SelfText,
-			Author:      child.Data.Author,
-			NumComments: child.Data.NumComments,
-		})
-	}
-	return rr, nil
+	return processRedditResponse(resp)
 }
 
-func (c *Client) FetchPostsBA(ctx context.Context, subreddit string, before string, after string) (RedditResponse, error) {
-	<-c.Throttle
-	baseURL, err := url.Parse(fmt.Sprintf("https://oauth.reddit.com/r/%s/new.json", subreddit))
-	if err != nil {
-		return RedditResponse{}, err
-	}
-
-	// Prepare Query Parameters
-	params := url.Values{}
-	if before != "" {
-		params.Add("before", before)
-	}
-	if after != "" {
-		params.Add("after", after)
-	}
-	baseURL.RawQuery = params.Encode() // Encode URL parameters
-
-	req, err := http.NewRequest("GET", baseURL.String(), nil)
-	if err != nil {
-		return RedditResponse{}, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
-	resp, err := c.HttpClient.Do(req)
-	if err != nil {
-		return RedditResponse{}, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return RedditResponse{}, err
-	}
-	var jsonData redditResponse
-	err = json.Unmarshal(body, &jsonData)
-	if err != nil {
-		log.Printf("\nUnparsable: \n%s\n", body)
-		return RedditResponse{}, err
-	} else {
-		log.Println(resp)
-		log.Printf("Ratelimit-Remaining: %s, Ratelimit-Reset: %s, Ratelimit-Used: %s\n",
-			resp.Header.Get("X-Ratelimit-Remaining"), resp.Header.Get("X-Ratelimit-Reset"), resp.Header.Get("X-Ratelimit-Used"))
-	}
-	rr := RedditResponse{
-		Before: jsonData.Data.Before,
-		After:  jsonData.Data.After,
-	}
-	for _, child := range jsonData.Data.Children {
-		rr.Posts = append(rr.Posts, Post{
-			ID:          child.Data.ID,
-			Title:       child.Data.Title,
-			Body:        child.Data.SelfText,
-			Author:      child.Data.Author,
-			NumComments: child.Data.NumComments,
-		})
-	}
-	return rr, nil
-}
-
+// callbackHandler handles the callback request from the OAuth server.
+// It extracts the authorization code from the request URL, stores it in the Client's AuthCode field,
+// and responds to the request with a message indicating that the authorization code has been received.
+// If there is an error while writing the response, an HTTP 500 error is returned.
+// The method is expected to be used in conjunction with the StartServer method.
+// Example usage:
+//
+//	c := &Client{}
+//	c.StartServer(context.Background())
+//	// User completes OAuth authorization flow and receives an authorization code
+//	// The authorization code is automatically stored in c.AuthCode by the callbackHandler method
+//	token, err := c.ExchangeAuthCode(context.Background())
 func (c *Client) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	c.AuthCode = r.URL.Query().Get("code")
 	log.Printf("code received: %s", c.AuthCode)
@@ -257,6 +258,20 @@ func (c *Client) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ExchangeAuthCode exchanges the authorization code for an OAuth2 token.
+// It waits for the Throttle channel to receive a signal before proceeding,
+// ensuring that the rate limit is respected.
+// It uses the OAuthConfig to make the token exchange request.
+// If successful, it stores the token in the Client's Token field and returns it.
+// If there is an error, it returns nil for the token and the error.
+//
+// Example usage:
+//
+//	c := &Client{}
+//	c.StartServer(context.Background())
+//	// User completes OAuth authorization flow and receives an authorization code
+//	// The authorization code is automatically stored in c.AuthCode by the callbackHandler method
+//	token, err := c.ExchangeAuthCode(context.Background())
 func (c *Client) ExchangeAuthCode(ctx context.Context) (*oauth2.Token, error) {
 	<-c.Throttle
 	t, err := c.OAuthConfig.Exchange(ctx, c.AuthCode)

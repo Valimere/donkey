@@ -3,6 +3,7 @@ package socialmedia
 import (
 	"context"
 	"golang.org/x/oauth2"
+	"time"
 )
 
 type RedditResponse struct {
@@ -16,6 +17,8 @@ type Post struct {
 	Body        string
 	Author      string
 	NumComments int
+	Upvotes     int
+	Created     time.Time
 }
 
 type SocialMedia interface {
