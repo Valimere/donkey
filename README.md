@@ -8,7 +8,9 @@ export REDDIT_SECRET=
 export REDDIT_USER_AGENT=
 ```
 ## Usage
+On first run it will prompt you to click a reddit site granting perms, and then capture the code after you allow via callback
 
+Subsequent runs will attempt to use the existing Oauth Token.
 ```shell
 Usage of ./donkey:
   -debug
@@ -19,6 +21,18 @@ Usage of ./donkey:
 % ./donkey -r "AskReddit, funny, gaming, aww, music, todayilearned, movies, science, showerthoughts"
 ctl + c to quit
 ```
+While I store relavant data in sqlite "donkey.db" it gets purged on startup for fresh data. That file will be created if it doesn't exist.
+
+### Outputs
+Debug mode will print the http request and gorm/sqlite access times and information this is a LOT of info
+
+Every request will print information so you know its working and when a new post is found it will print information about it to screen
+```shell
+2024/04/09 16:58:52 Ratelimit-Used: 17, Ratelimit-Remaining: 583.0, Ratelimit-Reset: 68, URL: https://oauth.reddit.com/r/AskReddit/new.json
+New Post found, PostID: 1c07ewr, Upvotes:    1 Comments:    0, Author:       MarvelsGrantMan136, Subreddit       movies, Title: ‘Super/Man: The Christopher Reeve Story’ To Hit Theaters In September
+```
+
+The statistics print after you hit ctl + c, if there are "ties" it will print all Author and post statistics
 
 ## Assignment:
 Reddit, much like other social media platforms, provides a way for users to communicate their interests etc. For this exercise, we would like to see you build an application that listens to your choice of subreddits (best to choose one with a good amount of posts). You can use this link to help identify one that interests you.  We'd like to see this as a ~~.NET 6/7~~ (Confirmed can be Golang, Stephen)  application, and you are free to use any 3rd party libraries you would like.
